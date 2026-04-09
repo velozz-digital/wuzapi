@@ -221,6 +221,15 @@ Configure HMAC keys via the Dashboard or using the `/session/hmac/config` API en
 
 When using Docker Compose, `docker-compose.yml` automatically loads environment variables from a `.env` file when available. However, `docker-compose-swarm.yaml` uses `docker stack deploy`, which does not automatically load from `.env` files. Variables in the swarm file will only be substituted if they are exported in the shell environment where the deploy command is run. For managing secrets in Swarm, consider using Docker secrets.
 
+### Quick Docker Profiles
+
+* **Standalone quick deploy** (recommended for fast setup/fallback tests): uses SQLite with persistent volume
+  * `docker compose -f docker-compose.standalone.yml up -d --build`
+* **Full stack**: uses PostgreSQL + RabbitMQ services
+  * `docker compose up -d --build`
+
+For a complete deployment and fallback guide, see [DEPLOY.md](DEPLOY.md).
+
 The Docker configuration will:
 1. First load variables from the `.env` file (if present and supported)
 2. Use default values as fallback if variables are not defined
