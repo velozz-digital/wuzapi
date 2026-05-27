@@ -30,7 +30,8 @@ func (s *server) GetGroupRequestParticipants() http.HandlerFunc {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
 
-		if clientManager.GetWhatsmeowClient(txtid) == nil {
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if client == nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
 			return
 		}
@@ -48,7 +49,7 @@ func (s *server) GetGroupRequestParticipants() http.HandlerFunc {
 			return
 		}
 
-		resp, err := clientManager.GetWhatsmeowClient(txtid).GetGroupRequestParticipants(context.Background(), group)
+		resp, err := client.GetGroupRequestParticipants(r.Context(), group)
 
 		if err != nil {
 			msg := fmt.Sprintf("Failed to get group request participants: %v", err)
