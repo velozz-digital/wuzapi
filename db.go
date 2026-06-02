@@ -121,11 +121,17 @@ type HistoryMessage struct {
 }
 
 func (s *server) saveMessageToHistory(userID, chatJID, senderJID, messageID, messageType, textContent, mediaLink, quotedMessageID, dataJson string) error {
+	// Idempotent insert: HistorySync batches (and reconnects) routinely redeliver
+	// messages already persisted via the live Message event. The (user_id, message_id)
+	// unique constraint makes those duplicates an expected condition, not an error,
+	// so skip them silently instead of failing the insert and logging at ERROR. See #292.
 	query := `INSERT INTO message_history (user_id, chat_jid, sender_jid, message_id, timestamp, message_type, text_content, media_link, quoted_message_id, datajson)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+              ON CONFLICT (user_id, message_id) DO NOTHING`
 	if s.db.DriverName() == "sqlite" {
 		query = `INSERT INTO message_history (user_id, chat_jid, sender_jid, message_id, timestamp, message_type, text_content, media_link, quoted_message_id, datajson)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT (user_id, message_id) DO NOTHING`
 	}
 	_, err := s.db.Exec(query, userID, chatJID, senderJID, messageID, time.Now(), messageType, textContent, mediaLink, quotedMessageID, dataJson)
 	if err != nil {
