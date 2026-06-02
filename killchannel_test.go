@@ -34,7 +34,7 @@ func TestKillChannelHelpers(t *testing.T) {
 	}
 
 	// delete removes the entry; signalKill on a missing entry is a safe no-op.
-	deleteKillChannel(u)
+	deleteKillChannel(u, ch)
 	if _, ok := getKillChannel(u); ok {
 		t.Error("entry still present after deleteKillChannel")
 	}
@@ -51,10 +51,11 @@ func TestKillChannelConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			setKillChannel(uid, make(chan bool, 1))
+			kc := make(chan bool, 1)
+			setKillChannel(uid, kc)
 			signalKill(uid)
 			_, _ = getKillChannel(uid)
-			deleteKillChannel(uid)
+			deleteKillChannel(uid, kc)
 		}()
 		wg.Add(1)
 		go func() {
@@ -64,4 +65,37 @@ func TestKillChannelConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestDeleteKillChannelStaleSession proves deleteKillChannel removes only the
+// caller's own channel. A slow-cleanup goroutine from an old session must not
+// delete the kill channel of a newer session for the same user — otherwise the
+// new session would be left in the map-less state and become unkillable.
+func TestDeleteKillChannelStaleSession(t *testing.T) {
+	const u = "stale-user"
+
+	// Old session registers chA; a reconnect for the same user then replaces
+	// the map entry with chB (this is what setKillChannel does on Connect).
+	chA := make(chan bool, 1)
+	chB := make(chan bool, 1)
+	setKillChannel(u, chA)
+	setKillChannel(u, chB)
+
+	// The old session's slow cleanup finally runs, deleting with ITS channel.
+	deleteKillChannel(u, chA)
+
+	// chB (the live session) must survive and stay killable.
+	got, ok := getKillChannel(u)
+	if !ok {
+		t.Fatal("stale cleanup deleted the new session's kill channel; session is now unkillable")
+	}
+	if got != chB {
+		t.Fatalf("getKillChannel = %v, want the new session's channel chB", got)
+	}
+
+	// When the live session itself cleans up, its own channel is removed.
+	deleteKillChannel(u, chB)
+	if _, ok := getKillChannel(u); ok {
+		t.Error("entry still present after deleteKillChannel with the current channel")
+	}
 }

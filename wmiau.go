@@ -672,7 +672,7 @@ func (s *server) startClient(userID string, textjid string, token string) {
 	if _, err := s.db.Exec(`UPDATE users SET qrcode='', connected=0 WHERE id=$1`, userID); err != nil {
 		log.Error().Err(err).Msg("failed to mark user disconnected on kill")
 	}
-	deleteKillChannel(userID)
+	deleteKillChannel(userID, kill)
 }
 
 func fileToBase64(filepath string) (string, string, error) {

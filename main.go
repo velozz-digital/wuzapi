@@ -102,9 +102,17 @@ func getKillChannel(userID string) (chan bool, bool) {
 	return ch, ok
 }
 
-func deleteKillChannel(userID string) {
+// deleteKillChannel removes userID's entry, but only if it still maps to ch.
+// A session goroutine passes the channel it captured at startup; if a newer
+// session has replaced the entry in the meantime (a reconnect for the same
+// user), the map holds a different channel and this is a no-op. That stops a
+// slow-cleanup goroutine from an old session deleting the live session's kill
+// channel and leaving the new session unkillable.
+func deleteKillChannel(userID string, ch chan bool) {
 	killchannelMu.Lock()
-	delete(killchannel, userID)
+	if current, ok := killchannel[userID]; ok && current == ch {
+		delete(killchannel, userID)
+	}
 	killchannelMu.Unlock()
 }
 
