@@ -347,19 +347,6 @@ func (m *S3Manager) TestConnection(ctx context.Context, userID string) error {
 	return err
 }
 
-// bucketFor returns the configured bucket for userID, read under the lock so it
-// cannot race with a concurrent reconfigure/removal (the configs map is written
-// under m.mu elsewhere). Returns an empty string when there is no config instead
-// of nil-dereferencing.
-func (m *S3Manager) bucketFor(userID string) string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if cfg, ok := m.configs[userID]; ok && cfg != nil {
-		return cfg.Bucket
-	}
-	return ""
-}
-
 // ProcessMediaForS3 handles the complete media upload process
 func (m *S3Manager) ProcessMediaForS3(ctx context.Context, userID, contactJID, messageID string,
 	data []byte, mimeType string, fileName string, isIncoming bool) (map[string]interface{}, error) {
@@ -376,11 +363,19 @@ func (m *S3Manager) ProcessMediaForS3(ctx context.Context, userID, contactJID, m
 	// Generate public URL
 	publicURL := m.GetPublicURL(userID, key)
 
+	// Read the bucket through GetClient, which acquires the read lock — this
+	// avoids racing with a concurrent reconfigure/removal of the configs map and
+	// the nil deref the previous unlocked read could hit.
+	bucket := ""
+	if _, config, ok := m.GetClient(userID); ok && config != nil {
+		bucket = config.Bucket
+	}
+
 	// Return S3 metadata
 	s3Data := map[string]interface{}{
 		"url":      publicURL,
 		"key":      key,
-		"bucket":   m.bucketFor(userID),
+		"bucket":   bucket,
 		"size":     len(data),
 		"mimeType": mimeType,
 		"fileName": fileName,
