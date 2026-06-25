@@ -453,14 +453,16 @@ func (s *server) startClient(userID string, textjid string, token string, kill c
 	// Store the MyClient in clientManager
 	clientManager.SetMyClient(userID, &mycli)
 
-	httpClient := resty.New()
-	httpClient.SetRedirectPolicy(resty.FlexibleRedirectPolicy(15))
+	// Webhook client: intentionally created without a proxy so webhook deliveries
+	// bypass any WhatsApp proxy configured for the websocket connection.
+	webhookClient := resty.New()
+	webhookClient.SetRedirectPolicy(resty.FlexibleRedirectPolicy(15))
 	if *waDebug == "DEBUG" {
-		httpClient.SetDebug(true)
+		webhookClient.SetDebug(true)
 	}
-	httpClient.SetTimeout(30 * time.Second)
-	httpClient.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
-	httpClient.OnError(func(req *resty.Request, err error) {
+	webhookClient.SetTimeout(30 * time.Second)
+	webhookClient.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
+	webhookClient.OnError(func(req *resty.Request, err error) {
 		if v, ok := err.(*resty.ResponseError); ok {
 			// v.Response contains the last response from the server
 			// v.Err contains the original error
@@ -469,7 +471,8 @@ func (s *server) startClient(userID string, textjid string, token string, kill c
 		}
 	})
 
-	// Set proxy if defined in DB (assumes users table contains proxy_url column)
+	// Set proxy for the WhatsApp connection if defined in DB (assumes users table contains proxy_url column).
+	// The webhook client above is deliberately left without a proxy.
 	var proxyURL string
 	err = s.db.Get(&proxyURL, "SELECT proxy_url FROM users WHERE id=$1", userID)
 	if err == nil && proxyURL != "" {
@@ -485,18 +488,16 @@ func (s *server) startClient(userID string, textjid string, token string, kill c
 				if derr != nil {
 					log.Warn().Err(derr).Str("proxy", proxyURL).Msg("Failed to build SOCKS proxy dialer, skipping proxy setup")
 				} else {
-					httpClient.SetProxy(proxyURL)
 					client.SetSOCKSProxy(dialer, whatsmeow.SetProxyOptions{})
-					log.Info().Msg("SOCKS proxy configured successfully")
+					log.Info().Msg("SOCKS proxy configured for WhatsApp connection")
 				}
 			} else {
-				httpClient.SetProxy(proxyURL)
 				client.SetProxyAddress(parsed.String(), whatsmeow.SetProxyOptions{})
-				log.Info().Msg("HTTP/HTTPS proxy configured successfully")
+				log.Info().Msg("HTTP/HTTPS proxy configured for WhatsApp connection")
 			}
 		}
 	}
-	clientManager.SetHTTPClient(userID, httpClient)
+	clientManager.SetHTTPClient(userID, webhookClient)
 
 	// Initialize S3 client if configured (needed when user reconnects after container restart - connectOnStartup only runs for connected=1)
 	GetS3Manager().EnsureClientFromDB(userID)
