@@ -767,11 +767,12 @@ func (s *server) GetStatus() http.HandlerFunc {
 		isLoggedIn := clientManager.GetWhatsmeowClient(txtid).IsLoggedIn()
 
 		var proxyURL string
-		s.db.QueryRow("SELECT proxy_url FROM users WHERE id = $1", txtid).Scan(&proxyURL)
-		proxyConfig := map[string]interface{}{
-			"enabled":   proxyURL != "",
-			"proxy_url": proxyURL,
-		}
+		var webhookUseProxy bool
+		s.db.QueryRow(
+			"SELECT proxy_url, COALESCE(webhook_use_proxy, true) FROM users WHERE id = $1",
+			txtid,
+		).Scan(&proxyURL, &webhookUseProxy)
+		proxyConfig := proxyConfigResponse(proxyURL, webhookUseProxy)
 
 		var s3Enabled bool
 		var s3Endpoint, s3Region, s3Bucket, s3PublicURL, s3MediaDelivery string
@@ -5295,10 +5296,16 @@ func (s *server) ListUsers() http.HandlerFunc {
 			}
 			// Add proxy_config
 			proxyURL := user.ProxyURL.String
-			userMap["proxy_config"] = map[string]interface{}{
-				"enabled":   proxyURL != "",
-				"proxy_url": proxyURL,
+			var webhookUseProxy bool
+			err = s.db.QueryRow(
+				"SELECT COALESCE(webhook_use_proxy, true) FROM users WHERE id = $1",
+				user.Id,
+			).Scan(&webhookUseProxy)
+			if err != nil && err != sql.ErrNoRows {
+				log.Warn().Err(err).Str("user_id", user.Id).Msg("Failed to query webhook_use_proxy for user")
+				webhookUseProxy = *globalWebhookUseProxy
 			}
+			userMap["proxy_config"] = proxyConfigResponse(proxyURL, webhookUseProxy)
 			// Add s3_config (search S3 fields in the database)
 			var s3Enabled bool
 			var s3Endpoint, s3Region, s3Bucket, s3PublicURL, s3MediaDelivery string
@@ -5358,11 +5365,6 @@ func (s *server) AddUser() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		type ProxyConfig struct {
-			Enabled  bool   `json:"enabled"`
-			ProxyURL string `json:"proxyURL"`
-		}
-
 		// Parse the request body
 		var user struct {
 			Name        string       `json:"name"`
@@ -5396,6 +5398,7 @@ func (s *server) AddUser() http.HandlerFunc {
 		if user.ProxyConfig == nil {
 			user.ProxyConfig = &ProxyConfig{}
 		}
+		webhookUseProxy := resolveWebhookUseProxy(user.ProxyConfig.WebhookUseProxy)
 		if user.S3Config == nil {
 			user.S3Config = &S3Config{}
 		}
@@ -5480,8 +5483,8 @@ func (s *server) AddUser() http.HandlerFunc {
 
 		// Insert user with all proxy, S3 and HMAC fields
 		if _, err = s.db.Exec(
-			"INSERT INTO users (id, name, token, webhook, expiration, events, jid, qrcode, proxy_url, s3_enabled, s3_endpoint, s3_region, s3_bucket, s3_access_key, s3_secret_key, s3_path_style, s3_public_url, media_delivery, s3_retention_days, hmac_key, history) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)",
-			id, user.Name, user.Token, user.Webhook, user.Expiration, user.Events, "", "", user.ProxyConfig.ProxyURL,
+			"INSERT INTO users (id, name, token, webhook, expiration, events, jid, qrcode, proxy_url, webhook_use_proxy, s3_enabled, s3_endpoint, s3_region, s3_bucket, s3_access_key, s3_secret_key, s3_path_style, s3_public_url, media_delivery, s3_retention_days, hmac_key, history) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
+			id, user.Name, user.Token, user.Webhook, user.Expiration, user.Events, "", "", user.ProxyConfig.ProxyURL, webhookUseProxy,
 			user.S3Config.Enabled, user.S3Config.Endpoint, user.S3Config.Region, user.S3Config.Bucket, user.S3Config.AccessKey, user.S3Config.SecretKey, user.S3Config.PathStyle, user.S3Config.PublicURL, user.S3Config.MediaDelivery, user.S3Config.RetentionDays, encryptedHmacKey, user.History,
 		); err != nil {
 			log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("admin DB error")
@@ -5511,10 +5514,7 @@ func (s *server) AddUser() http.HandlerFunc {
 		}
 
 		// Build response like GET /admin/users
-		proxyConfig := map[string]interface{}{
-			"enabled":   user.ProxyConfig.Enabled,
-			"proxy_url": user.ProxyConfig.ProxyURL,
-		}
+		proxyConfig := proxyConfigResponse(user.ProxyConfig.ProxyURL, webhookUseProxy)
 		s3Config := map[string]interface{}{
 			"enabled":        user.S3Config.Enabled,
 			"endpoint":       user.S3Config.Endpoint,
@@ -5549,11 +5549,6 @@ func (s *server) AddUser() http.HandlerFunc {
 func (s *server) EditUser() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-
-		type ProxyConfig struct {
-			Enabled  bool   `json:"enabled"`
-			ProxyURL string `json:"proxyURL"`
-		}
 
 		// Get the user ID from the request URL
 		vars := mux.Vars(r)
@@ -5654,6 +5649,9 @@ func (s *server) EditUser() http.HandlerFunc {
 				addField("proxy_url", user.ProxyConfig.ProxyURL, true)
 			} else {
 				addField("proxy_url", "", true)
+			}
+			if user.ProxyConfig.WebhookUseProxy != nil {
+				addField("webhook_use_proxy", *user.ProxyConfig.WebhookUseProxy, true)
 			}
 		}
 
@@ -6056,8 +6054,9 @@ func (s *server) SetHistory() http.HandlerFunc {
 // Set proxy
 func (s *server) SetProxy() http.HandlerFunc {
 	type proxyStruct struct {
-		ProxyURL string `json:"proxy_url"` // Format: "socks5://user:pass@host:port" or "http://host:port"
-		Enable   bool   `json:"enable"`    // Whether to enable or disable proxy
+		ProxyURL        string `json:"proxy_url"` // Format: "socks5://user:pass@host:port" or "http://host:port"
+		Enable          bool   `json:"enable"`    // Whether to enable or disable proxy
+		WebhookUseProxy *bool  `json:"webhook_use_proxy,omitempty"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -6080,7 +6079,15 @@ func (s *server) SetProxy() http.HandlerFunc {
 
 		// If enable is false, remove proxy configuration
 		if !t.Enable {
-			_, err = s.db.Exec("UPDATE users SET proxy_url = '' WHERE id = $1", txtid)
+			if t.WebhookUseProxy != nil {
+				_, err = s.db.Exec(
+					"UPDATE users SET proxy_url = '', webhook_use_proxy = $1 WHERE id = $2",
+					*t.WebhookUseProxy,
+					txtid,
+				)
+			} else {
+				_, err = s.db.Exec("UPDATE users SET proxy_url = '' WHERE id = $1", txtid)
+			}
 			if err != nil {
 				s.Respond(w, r, http.StatusInternalServerError, errors.New("failed to remove proxy configuration"))
 				return
@@ -6124,7 +6131,13 @@ func (s *server) SetProxy() http.HandlerFunc {
 		}
 
 		// Store proxy configuration in database
-		_, err = s.db.Exec("UPDATE users SET proxy_url = $1 WHERE id = $2", t.ProxyURL, txtid)
+		webhookUseProxy := resolveWebhookUseProxy(t.WebhookUseProxy)
+		_, err = s.db.Exec(
+			"UPDATE users SET proxy_url = $1, webhook_use_proxy = $2 WHERE id = $3",
+			t.ProxyURL,
+			webhookUseProxy,
+			txtid,
+		)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("failed to save proxy configuration"))
 			return
@@ -6140,8 +6153,9 @@ func (s *server) SetProxy() http.HandlerFunc {
 		}
 
 		response := map[string]interface{}{
-			"Details":  "Proxy configured successfully",
-			"ProxyURL": t.ProxyURL,
+			"Details":           "Proxy configured successfully",
+			"ProxyURL":          t.ProxyURL,
+			"webhook_use_proxy": webhookUseProxy,
 		}
 		responseJson, err := json.Marshal(response)
 		if err != nil {

@@ -2220,6 +2220,10 @@ definitions:
           proxy_url:
             type: string
             example: "https://serverproxy.com:9080"
+          webhook_use_proxy:
+            type: boolean
+            example: true
+            description: "Whether webhook deliveries use the configured proxy"
       s3_config:
         type: object
         properties:
@@ -2282,6 +2286,10 @@ definitions:
             type: string
             example: "https://serverproxy.com:9080"
             description: "Proxy URL to use for the user. Format: socks5://user:pass@host:port or http://host:port"
+          webhookUseProxy:
+            type: boolean
+            example: true
+            description: "Route webhook deliveries through the configured proxy. Defaults to the WUZAPI_WEBHOOK_USE_PROXY server setting (true)."
       s3Config:
         type: object
         properties:

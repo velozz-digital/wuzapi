@@ -453,8 +453,7 @@ func (s *server) startClient(userID string, textjid string, token string, kill c
 	// Store the MyClient in clientManager
 	clientManager.SetMyClient(userID, &mycli)
 
-	// Webhook client: intentionally created without a proxy so webhook deliveries
-	// bypass any WhatsApp proxy configured for the websocket connection.
+	// Webhook HTTP client for outgoing webhook deliveries.
 	webhookClient := resty.New()
 	webhookClient.SetRedirectPolicy(resty.FlexibleRedirectPolicy(15))
 	if *waDebug == "DEBUG" {
@@ -471,17 +470,18 @@ func (s *server) startClient(userID string, textjid string, token string, kill c
 		}
 	})
 
-	// Set proxy for the WhatsApp connection if defined in DB (assumes users table contains proxy_url column).
-	// The webhook client above is deliberately left without a proxy.
 	var proxyURL string
-	err = s.db.Get(&proxyURL, "SELECT proxy_url FROM users WHERE id=$1", userID)
+	var webhookUseProxy bool
+	err = s.db.QueryRow(
+		"SELECT proxy_url, COALESCE(webhook_use_proxy, true) FROM users WHERE id=$1",
+		userID,
+	).Scan(&proxyURL, &webhookUseProxy)
 	if err == nil && proxyURL != "" {
 		parsed, perr := url.Parse(proxyURL)
 		if perr != nil {
 			log.Warn().Err(perr).Str("proxy", proxyURL).Msg("Invalid proxy URL, skipping proxy setup")
 		} else {
-
-			log.Info().Str("proxy", proxyURL).Msg("Configuring proxy")
+			log.Info().Str("proxy", proxyURL).Bool("webhook_use_proxy", webhookUseProxy).Msg("Configuring proxy")
 
 			if parsed.Scheme == "socks5" || parsed.Scheme == "socks5h" {
 				dialer, derr := proxy.FromURL(parsed, nil)
@@ -494,6 +494,13 @@ func (s *server) startClient(userID string, textjid string, token string, kill c
 			} else {
 				client.SetProxyAddress(parsed.String(), whatsmeow.SetProxyOptions{})
 				log.Info().Msg("HTTP/HTTPS proxy configured for WhatsApp connection")
+			}
+
+			if webhookUseProxy {
+				applyRestyProxy(webhookClient, proxyURL)
+				log.Info().Msg("Proxy configured for webhook delivery client")
+			} else {
+				log.Info().Msg("Webhook delivery client bypassing proxy")
 			}
 		}
 	}
