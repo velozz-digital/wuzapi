@@ -501,7 +501,7 @@ func (s *server) startClient(userID string, textjid string, token string, kill c
 			}
 
 			if webhookUseProxy {
-				applyRestyProxy(webhookClient, proxyURL)
+				webhookClient.SetProxy(proxyURL)
 				log.Info().Msg("Proxy configured for webhook delivery client")
 			} else {
 				log.Info().Msg("Webhook delivery client bypassing proxy")

@@ -113,10 +113,6 @@ func proxyConfigResponse(proxyURL string, webhookUseProxy bool) map[string]inter
 	}
 }
 
-func applyRestyProxy(client *resty.Client, proxyURL string) {
-	client.SetProxy(proxyURL)
-}
-
 type openGraphResult struct {
 	Title       string
 	Description string
