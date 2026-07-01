@@ -3471,7 +3471,7 @@ func (s *server) SubscribePresence() http.HandlerFunc {
 			return
 		}
 
-		err = clientManager.GetWhatsmeowClient(txtid).SubscribePresence(context.Background(), jid)
+		err = clientManager.GetWhatsmeowClient(txtid).SubscribePresence(r.Context(), jid)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("failure subscribing to presence"))
 			return
