@@ -3479,7 +3479,7 @@ func (s *server) SubscribePresence() http.HandlerFunc {
 
 		log.Info().Str("jid", jid.String()).Msg("Subscribed to presence")
 
-		response := map[string]interface{}{"Details": "Presence subscription requested successfuly"}
+		response := map[string]interface{}{"Details": "Presence subscription requested successfully"}
 		responseJson, err := json.Marshal(response)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, err)
